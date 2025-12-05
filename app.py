@@ -22,23 +22,26 @@ plt.rcParams['figure.figsize'] = (8,5)
 MODEL_FILE_NAME = "model_rf.pkl" 
 DEFAULT_DATA_PATH = "Morning_Routine_Productivity_Dataset.csv" 
 
+# --- INISIALISASI STATUS SESI ---
+# PENTING: Jika variabel tidak ada di status sesi, inisialisasi sebagai False atau None
+if 'fe_done' not in st.session_state:
+    st.session_state.fe_done = False
+if 'df_final_train' not in st.session_state:
+    st.session_state.df_final_train = None
+if 'df_fe_display' not in st.session_state:
+    st.session_state.df_fe_display = None
+
+
 # --- 1. FUNGSI MEMUAT MODEL (Pre-trained) ---
 @st.cache_resource
 def load_pretrained_model(file_path):
     """Memuat model Random Forest Regressor yang sudah dilatih (pkl)."""
     try:
-        # PENTING: Membaca file model biner (rb)
         with open(file_path, "rb") as f:
             model = pickle.load(f)
         return model
     except FileNotFoundError:
         st.sidebar.error(f"Error: File model '{file_path}' tidak ditemukan. Anda dapat melatih model baru di bawah.")
-        return None
-    except EOFError:
-        st.sidebar.error(f"Error: File model '{file_path}' kosong atau rusak saat dimuat. Silakan re-upload model.")
-        return None
-    except pickle.UnpicklingError:
-        st.sidebar.error(f"Error: File model '{file_path}' rusak (corrupted). Harap pastikan model di-upload ulang sebagai file biner.")
         return None
     except Exception as e:
         st.sidebar.error(f"Error saat memuat model: {e}")
@@ -110,7 +113,6 @@ else:
 st.sidebar.markdown("---")
 
 # --- 5. LOGIKA PEMUATAN DATA UTAMA ---
-# Memberi opsi upload, jika tidak ada upload, kode akan mencari file default di repo
 uploaded_file = st.file_uploader(f"1. Upload file CSV (opsional, menggunakan data default jika kosong)", type=['csv'])
 
 # Tentukan sumber data
@@ -175,26 +177,39 @@ if data_source is not None:
         plt.title("Heatmap Korelasi Antar Variabel Numerik pada Morning Routine Dataset")
         st.pyplot(fig5)
 
-        # --- BAGIAN TRAINING MODEL ---
+        # --- BAGIAN FEATURE ENGINEERING & NESTED BUTTON LOGIC ---
         st.subheader("Feature engineering (imputasi & fitur baru)")
+        
+        # Logika tombol yang menyimpan status ke Session State
         if st.button("Run feature engineering"):
             
             df_final_train, df_fe_display = run_feature_engineering_and_encoding(df)
             
-            st.success("Feature engineering selesai.")
+            # SIMPAN HASIL KE SESSION STATE
+            st.session_state.df_final_train = df_final_train
+            st.session_state.df_fe_display = df_fe_display
+            st.session_state.fe_done = True
             
-            st.dataframe(df_fe_display.head())
+            st.success("Feature engineering selesai.")
+            # st.experimental_rerun() # Tidak perlu Rerun eksplisit
+        
+        # --- TAMPILKAN HASIL FE HANYA JIKA SUDAH SELESAI ---
+        if st.session_state.fe_done:
+            st.dataframe(st.session_state.df_fe_display.head())
             
             st.markdown("### One-hot encoding dan seleksi fitur (contoh)")
-            st.write("Shape setelah encoding & selection:", df_final_train.shape)
-            st.dataframe(df_final_train.head())
+            st.write("Shape setelah encoding & selection:", st.session_state.df_final_train.shape)
+            st.dataframe(st.session_state.df_final_train.head())
 
+            # --- SUB-BLOCK 1: TRAINING ---
             st.subheader("Train models (regresi)")
             if st.button("Train models (Linear + RF)"):
                 
+                df_train_data = st.session_state.df_final_train
+                
                 # Split Data
-                X = df_final_train.drop("Productivity_Score (1-10)", axis=1)
-                y = df_final_train["Productivity_Score (1-10)"]
+                X = df_train_data.drop("Productivity_Score (1-10)", axis=1)
+                y = df_train_data["Productivity_Score (1-10)"]
                 X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.2, random_state=42)
                 X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -213,24 +228,31 @@ if data_source is not None:
                 st.write("MSE (Linear Regression):", mse_lin)
                 st.write("MSE (Random Forest):", mse_rf)
 
-                # --- Menyimpan model ke MODEL_FILE_NAME (model_rf.pkl) ---
+                # Menyimpan model
                 with open(MODEL_FILE_NAME, "wb") as f:
                     pickle.dump(rf, f)
                 st.success(f"Model Random Forest disimpan sementara sebagai {MODEL_FILE_NAME}")
                 st.warning("Perhatian: Model yang baru dilatih ini hanya sementara. Untuk permanen, Anda harus mengunduh dan mengunggahnya ke GitHub.")
-                # --------------------------------------------------------
 
+            # --- SUB-BLOCK 2: CLUSTERING ---
             st.subheader("Clustering (KMeans)")
             if st.button("Run KMeans (n_clusters=3)"):
-                X_unsup = df_final_train.select_dtypes(include=np.number).drop(columns=["Productivity_Score (1-10)"], errors='ignore')
+                
+                df_display_data = st.session_state.df_fe_display # Menggunakan data untuk display
+                
+                # Hanya ambil kolom numerik untuk clustering
+                X_unsup = df_display_data.select_dtypes(include=np.number).drop(columns=["Productivity_Score (1-10)"], errors='ignore')
                 X_scaled_unsup = StandardScaler().fit_transform(X_unsup)
+                
+                # Running KMeans
                 kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
                 clusters = kmeans.fit_predict(X_scaled_unsup)
-                df_fe_display["Cluster"] = clusters
-                st.write(df_fe_display[["Sleep Duration (hrs)", "Exercise (mins)", "Productivity_Score (1-10)", "Cluster"]].head())
+                
+                df_display_data["Cluster"] = clusters
+                st.write(df_display_data[["Sleep Duration (hrs)", "Exercise (mins)", "Productivity_Score (1-10)", "Cluster"]].head())
                 
                 figc = plt.figure(figsize=(6,5))
-                sns.scatterplot(x=df_fe_display["Sleep Duration (hrs)"], y=df_fe_display["Productivity_Score (1-10)"], hue=df_fe_display["Cluster"], palette="Set2")
+                sns.scatterplot(x=df_display_data["Sleep Duration (hrs)"], y=df_display_data["Productivity_Score (1-10)"], hue=df_display_data["Cluster"], palette="Set2")
                 plt.title("Clustering: Durasi Tidur vs Skor Produktivitas")
                 st.pyplot(figc)
 
@@ -238,4 +260,5 @@ if data_source is not None:
         st.info(f"Dataset saat ini dimuat dari: {source_info}. File model yang dicari adalah `{MODEL_FILE_NAME}`.")
         
 else:
-    st.warning(f"Unggah file CSV ({DEFAULT_DATA_PATH}) untuk memulai, atau pastikan file tersebut ada di root repository Anda.")
+    # Ini adalah warning jika tidak ada data sama sekali (baik upload maupun default di repo)
+    pass
