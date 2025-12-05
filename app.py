@@ -12,7 +12,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.cluster import KMeans
 import pickle
 
-st.set_option('deprecation.showPyplotGlobalUse', False)
 sns.set(style="whitegrid")
 plt.rcParams['figure.figsize'] = (8,5)
 
