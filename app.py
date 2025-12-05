@@ -13,11 +13,10 @@ import pickle
 import os 
 import warnings
 
-# Mengabaikan warning KMeans Inisialisasi
+# --- KONFIGURASI DAN HILANGKAN WARNING ---
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# --- KONSTANTA ---
 sns.set(style="whitegrid")
 plt.rcParams['figure.figsize'] = (8,5)
 MODEL_FILE_NAME = "model_rf.pkl" 
@@ -28,11 +27,18 @@ DEFAULT_DATA_PATH = "Morning_Routine_Productivity_Dataset.csv"
 def load_pretrained_model(file_path):
     """Memuat model Random Forest Regressor yang sudah dilatih (pkl)."""
     try:
+        # PENTING: Membaca file model biner (rb)
         with open(file_path, "rb") as f:
             model = pickle.load(f)
         return model
     except FileNotFoundError:
         st.sidebar.error(f"Error: File model '{file_path}' tidak ditemukan. Anda dapat melatih model baru di bawah.")
+        return None
+    except EOFError:
+        st.sidebar.error(f"Error: File model '{file_path}' kosong atau rusak saat dimuat. Silakan re-upload model.")
+        return None
+    except pickle.UnpicklingError:
+        st.sidebar.error(f"Error: File model '{file_path}' rusak (corrupted). Harap pastikan model di-upload ulang sebagai file biner.")
         return None
     except Exception as e:
         st.sidebar.error(f"Error saat memuat model: {e}")
@@ -82,14 +88,13 @@ def run_feature_engineering_and_encoding(df):
     
     # One-hot encoding dan seleksi fitur untuk Training
     df_encoded = pd.get_dummies(df_fe, columns=["Breakfast Type", "Journaling (Y/N)", "Mood"], drop_first=True)
-    drop_cols_train = ["Date", "Wake-up Time", "Work Start Time", "Notes"]
+    drop_cols_train = ["Date", "Wake-up Time", "Work Start Time", "Notes", "Productivity_Level", "Healthy_Morning", "Sleep_Category"]
     
-    # Menghapus kolom
     df_final = df_encoded.drop(columns=[c for c in drop_cols_train if c in df_encoded.columns], errors='ignore')
     
-    return df_final, df_fe # Mengembalikan data FE untuk training dan data FE untuk display
+    return df_final, df_fe 
 
-# --- 4. JUDUL UTAMA & SIDEBAR (Menampilkan status model) ---
+# --- 4. JUDUL UTAMA & SIDEBAR ---
 st.title("Morning Routine Productivity — Explorer & Model Demo")
 st.markdown("Aplikasi untuk eksplorasi data, melatih model, dan memuat model yang sudah ada.")
 
@@ -98,12 +103,14 @@ if rf_reg_model:
     st.sidebar.success(f"Model {MODEL_FILE_NAME} siap digunakan.")
     st.sidebar.subheader("Info Model")
     st.sidebar.caption(f"Estimator: {rf_reg_model.n_estimators}")
+    st.sidebar.caption("Status: Siap Membuat Prediksi")
 else:
-    st.sidebar.info("Model tidak dimuat. Silakan latih model baru di bawah.")
+    st.sidebar.info("Model tidak dimuat.")
 
 st.sidebar.markdown("---")
 
 # --- 5. LOGIKA PEMUATAN DATA UTAMA ---
+# Memberi opsi upload, jika tidak ada upload, kode akan mencari file default di repo
 uploaded_file = st.file_uploader(f"1. Upload file CSV (opsional, menggunakan data default jika kosong)", type=['csv'])
 
 # Tentukan sumber data
@@ -115,7 +122,7 @@ elif os.path.exists(DEFAULT_DATA_PATH):
     source_info = "Default Repository"
 else:
     data_source = None
-    source_info = None
+    st.warning(f"Unggah file CSV ({DEFAULT_DATA_PATH}) untuk memulai, atau pastikan file tersebut ada di root repository Anda.")
 
 # --- MEMPROSES DAN MENAMPILKAN DATA ---
 if data_source is not None:
@@ -132,7 +139,6 @@ if data_source is not None:
             st.write(df.isnull().sum())
 
         st.subheader("Exploratory plots")
-        # Plotting code
         st.markdown("### Distribusi Tingkat Produktivitas (1–10)")
         fig1 = plt.figure()
         sns.countplot(x="Productivity_Score (1-10)", data=df, palette="pastel")
@@ -149,7 +155,7 @@ if data_source is not None:
         st.markdown("### Boxplot Durasi Tidur per Tingkat Produktivitas")
         fig3 = plt.figure()
         sns.boxplot(x="Productivity_Score (1-10)", y="Sleep Duration (hrs)", data=df)
-        st.title("Boxplot Durasi Tidur per Tingkat Produktivitas")
+        plt.title("Boxplot Durasi Tidur per Tingkat Produktivitas")
         st.pyplot(fig3)
 
         st.markdown("### Scatter: Durasi Tidur vs Durasi Olahraga (hue: Productivity Score)")
@@ -166,7 +172,7 @@ if data_source is not None:
         numeric_df = df.select_dtypes(include=np.number)
         fig5 = plt.figure(figsize=(10,8))
         sns.heatmap(numeric_df.corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5)
-        st.title("Heatmap Korelasi Antar Variabel Numerik pada Morning Routine Dataset")
+        plt.title("Heatmap Korelasi Antar Variabel Numerik pada Morning Routine Dataset")
         st.pyplot(fig5)
 
         # --- BAGIAN TRAINING MODEL ---
@@ -177,7 +183,7 @@ if data_source is not None:
             
             st.success("Feature engineering selesai.")
             
-            st.dataframe(df_fe_display.head()) # Tampilkan hasil FE dengan fitur baru
+            st.dataframe(df_fe_display.head())
             
             st.markdown("### One-hot encoding dan seleksi fitur (contoh)")
             st.write("Shape setelah encoding & selection:", df_final_train.shape)
@@ -210,12 +216,12 @@ if data_source is not None:
                 # --- Menyimpan model ke MODEL_FILE_NAME (model_rf.pkl) ---
                 with open(MODEL_FILE_NAME, "wb") as f:
                     pickle.dump(rf, f)
-                st.success(f"Model Random Forest disimpan sebagai {MODEL_FILE_NAME}")
+                st.success(f"Model Random Forest disimpan sementara sebagai {MODEL_FILE_NAME}")
+                st.warning("Perhatian: Model yang baru dilatih ini hanya sementara. Untuk permanen, Anda harus mengunduh dan mengunggahnya ke GitHub.")
                 # --------------------------------------------------------
 
             st.subheader("Clustering (KMeans)")
             if st.button("Run KMeans (n_clusters=3)"):
-                # Kita harus memastikan df_final_train digunakan untuk Clustering
                 X_unsup = df_final_train.select_dtypes(include=np.number).drop(columns=["Productivity_Score (1-10)"], errors='ignore')
                 X_scaled_unsup = StandardScaler().fit_transform(X_unsup)
                 kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
@@ -229,7 +235,7 @@ if data_source is not None:
                 st.pyplot(figc)
 
         st.markdown("---")
-        st.info(f"Dataset saat ini dimuat dari: {source_info}. File model Anda adalah `{MODEL_FILE_NAME}`.")
+        st.info(f"Dataset saat ini dimuat dari: {source_info}. File model yang dicari adalah `{MODEL_FILE_NAME}`.")
         
 else:
     st.warning(f"Unggah file CSV ({DEFAULT_DATA_PATH}) untuk memulai, atau pastikan file tersebut ada di root repository Anda.")
