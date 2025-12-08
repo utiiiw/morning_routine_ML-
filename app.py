@@ -41,35 +41,30 @@ if 'df_fe_display' not in st.session_state:
 
 
 # --- 1. FUNGSI MEMUAT MODEL (Pre-trained) ---
-# Menggunakan st.cache_data agar Streamlit tidak mencoba load saat startup
+# Menggunakan st.cache_data untuk pemuatan yang lebih stabil dan tidak agresif saat startup
 @st.cache_data
 def load_pretrained_model(file_path):
     """Memuat model dari file path."""
     try:
-        # PENTING: Membaca file model biner (rb)
         with open(file_path, "rb") as f:
             model = pickle.load(f)
         return model
+    except FileNotFoundError:
+        return None
     except Exception as e:
-        # Mengembalikan None jika gagal
         return None
 
-# --- 2. FUNGSI MEMUAT DATA DENGAN DUKUNGAN REPOSITORY ---
+# --- 2. FUNGSI MEMUAT DATA DARI REPOSITORY ---
 @st.cache_data
 def load_df(file_source):
-    """Memuat DataFrame dari file yang diunggah atau dari path default."""
-    if isinstance(file_source, str):
-        try:
-            df = pd.read_csv(file_source)
-            st.sidebar.success(f"Dataset berhasil dimuat dari repository: {os.path.basename(file_source)}")
-            return df
-        except Exception as e:
-            st.error(f"Gagal memuat file default dari GitHub. Error: {e}")
-            return None
-    else:
+    """Memuat DataFrame dari path default di repository."""
+    try:
         df = pd.read_csv(file_source)
-        st.sidebar.success("Dataset berhasil dimuat dari file yang diunggah.")
+        st.sidebar.success(f"Dataset berhasil dimuat dari repository: {os.path.basename(file_source)}")
         return df
+    except Exception as e:
+        st.error(f"Gagal memuat file default dari GitHub. Error: {e}")
+        return None
 
 # --- 3. LOGIKA PEMROSESAN DATA (FE & Encoding) ---
 def run_feature_engineering_and_encoding(df):
@@ -105,90 +100,94 @@ def run_feature_engineering_and_encoding(df):
     
     return df_final, df_fe 
 
-# --- 4. JUDUL UTAMA & SIDEBAR ---
-st.title("🚀 Morning Routine Productivity Predictor")
-st.markdown("Aplikasi berbasis Streamlit untuk memprediksi tingkat produktivitas Anda menggunakan model **Logistic Regression**.")
+# --- APLIKASI UTAMA ---
 
+st.title("🚀 Morning Routine Productivity Predictor")
+st.markdown("Aplikasi berbasis Streamlit untuk memprediksi tingkat produktivitas Anda.")
+
+# --- MEMUAT DATA DARI REPOSITORY ---
+data_source = DEFAULT_DATA_PATH # Langsung ambil dari GitHub
+df = load_df(data_source)
+
+# --- SIDEBAR: STATUS MODEL ---
 st.sidebar.subheader("Status Model Prediksi")
-# TIDAK MEMANGGIL load_pretrained_model di sini agar tidak langsung error saat startup
-st.sidebar.caption(f"Model Klasifikasi (LR): {MODEL_CLASSIFICATION_FILE}")
-st.sidebar.info("Model akan dimuat saat tombol 'Lakukan Prediksi' ditekan.")
+# Model dimuat di sini, jika gagal, ia mengembalikan None tanpa memicu error di sidebar
+lr_cls_model = load_pretrained_model(MODEL_CLASSIFICATION_FILE) 
+
+if lr_cls_model:
+    st.sidebar.success(f"Model Klasifikasi (LR): ✅ Dimuat.")
+else:
+    st.sidebar.error(f"❌ Model: {MODEL_CLASSIFICATION_FILE} tidak ditemukan. Silakan *train* dan *upload* model.")
 st.sidebar.markdown("---")
 
-# --- 5. LOGIKA PEMUATAN DATA UTAMA ---
-uploaded_file = st.file_uploader(f"1. Unggah file CSV (opsional, menggunakan data default jika kosong)", type=['csv'])
 
-if uploaded_file is not None:
-    data_source = uploaded_file
-    source_info = "File Upload"
-elif os.path.exists(DEFAULT_DATA_PATH):
-    data_source = DEFAULT_DATA_PATH
-    source_info = "Default Repository"
-else:
-    data_source = None
-    st.warning(f"Unggah file CSV ({DEFAULT_DATA_PATH}) untuk memulai, atau pastikan file tersebut ada di root repository Anda.")
+if df is not None:
+    # --- TABS: PREDIKSI vs TRAINING/EXPLORER ---
+    tab1, tab2 = st.tabs(["⚡ Prediksi Produktivitas", "📊 Eksplorasi & Training"])
 
+    with tab2: # Eksplorasi & Training
+        st.header("Training Model (Logistic Regression)")
+        st.info(f"Data dimuat dari: {DEFAULT_DATA_PATH}")
+        
+        # Tampilan Data Awal (dari repo)
+        st.subheader("Data Awal (10 Baris)")
+        st.dataframe(df.head(10))
 
-if data_source is not None:
-    df = load_df(data_source)
-    
-    if df is not None:
-        # --- TABS: PREDIKSI vs TRAINING/EXPLORER ---
-        tab1, tab2 = st.tabs(["⚡ Prediksi Produktivitas", "📊 Eksplorasi & Training"])
+        with st.expander("Dataset info & missing values"):
+            st.text("Columns and dtypes:")
+            st.write(df.dtypes)
+            st.write("Missing values per column:")
+            st.write(df.isnull().sum())
 
-        with tab2: # Eksplorasi & Training
-            st.header("Training Model (Logistic Regression)")
-            st.info("Gunakan tab ini jika Anda ingin melatih model baru dari data yang diunggah dan menyimpannya.")
+        # Logika Feature Engineering
+        if st.button("Run feature engineering"):
+            df_final_train, df_fe_display = run_feature_engineering_and_encoding(df)
             
-            # Logika Feature Engineering
-            if st.button("Run feature engineering"):
-                df_final_train, df_fe_display = run_feature_engineering_and_encoding(df)
-                
-                # SIMPAN HASIL KE SESSION STATE
-                st.session_state.df_final_train = df_final_train
-                st.session_state.df_fe_display = df_fe_display
-                st.session_state.fe_done = True
-                
-                st.success("Feature engineering selesai. Data siap untuk Training.")
-                st.markdown("---")
-                st.dataframe(st.session_state.df_final_train.head())
+            # SIMPAN HASIL KE SESSION STATE
+            st.session_state.df_final_train = df_final_train
+            st.session_state.df_fe_display = df_fe_display
+            st.session_state.fe_done = True
+            
+            st.success("Feature engineering selesai. Data siap untuk Training.")
+        
+        # --- BLOK KONDISIONAL UNTUK TRAINING ---
+        if st.session_state.fe_done and st.session_state.df_final_train is not None:
+            st.dataframe(st.session_state.df_fe_display.head())
+            
+            st.markdown("### One-hot encoding dan seleksi fitur (contoh)")
+            st.write("Shape setelah encoding & selection:", st.session_state.df_final_train.shape)
+            st.dataframe(st.session_state.df_final_train.head())
 
-            # Logika Training
-            if st.session_state.fe_done and st.session_state.df_final_train is not None:
-                st.subheader("Train Logistic Regression")
-                if st.button("Train, Evaluate, and Save Logistic Regression Model"):
-                    
-                    df_train_data = st.session_state.df_final_train
-                    
-                    # Data Klasifikasi (Target: Is_Productive)
-                    X_cls = df_train_data.drop(columns=["Productivity_Score (1-10)", "Is_Productive"], errors='ignore')
-                    y_cls = df_train_data["Is_Productive"]
+            st.subheader("Train Logistic Regression")
+            if st.button("Train, Evaluate, and Save Logistic Regression Model"):
+                
+                df_train_data = st.session_state.df_final_train
+                
+                # Data Klasifikasi (Target: Is_Productive)
+                X_cls = df_train_data.drop(columns=["Productivity_Score (1-10)", "Is_Productive"], errors='ignore')
+                y_cls = df_train_data["Is_Productive"]
 
-                    # Split Data Klasifikasi
-                    X_train_cls, X_val_cls, y_train_cls, y_val_cls = train_test_split(X_cls, y_cls, test_size=0.2, stratify=y_cls, random_state=42)
-                    
-                    st.markdown("#### Logistic Regression (Predict Produktif/Tidak)")
-                    # Inisialisasi dan latih Logistic Regression
-                    lr_cls = LogisticRegression(random_state=42, max_iter=1000)
-                    lr_cls.fit(X_train_cls, y_train_cls)
-                    y_val_pred_lr = lr_cls.predict(X_val_cls)
-                    accuracy_lr = accuracy_score(y_val_cls, y_val_pred_lr)
-                    st.write(f"Akurasi Model (Logistic Regression): **{accuracy_lr:.4f}**")
-                    
-                    # Menyimpan model Klasifikasi
-                    with open(MODEL_CLASSIFICATION_FILE, "wb") as f:
-                        pickle.dump(lr_cls, f)
-                    st.success(f"Model Klasifikasi (LR) disimpan sebagai **{MODEL_CLASSIFICATION_FILE}**")
-                    st.warning("PENTING: Agar prediksi bekerja, Anda harus mengunduh file **model_lr_cls.pkl** ini dan mengunggahnya ke GitHub Anda!")
+                # Split Data Klasifikasi
+                X_train_cls, X_val_cls, y_train_cls, y_val_cls = train_test_split(X_cls, y_cls, test_size=0.2, stratify=y_cls, random_state=42)
+                
+                st.markdown("#### Logistic Regression (Predict Produktif/Tidak)")
+                lr_cls = LogisticRegression(random_state=42, max_iter=1000)
+                lr_cls.fit(X_train_cls, y_train_cls)
+                y_val_pred_lr = lr_cls.predict(X_val_cls)
+                accuracy_lr = accuracy_score(y_val_cls, y_val_pred_lr)
+                st.write(f"Akurasi Model (Logistic Regression): **{accuracy_lr:.4f}**")
+                
+                # Menyimpan model Klasifikasi
+                with open(MODEL_CLASSIFICATION_FILE, "wb") as f:
+                    pickle.dump(lr_cls, f)
+                st.success(f"Model Klasifikasi (LR) disimpan sebagai **{MODEL_CLASSIFICATION_FILE}**")
+                st.warning("PENTING: Agar prediksi bekerja, Anda harus mengunduh file ini dan mengunggahnya ke GitHub Anda!")
 
         with tab1: # Prediksi Produktivitas
             st.header("Masukkan Rutin Pagi Anda")
             
-            # --- PEMUATAN MODEL DI DALAM BLOK PREDIKSI ---
-            lr_cls_model = load_pretrained_model(MODEL_CLASSIFICATION_FILE)
-            
             if lr_cls_model is None:
-                st.warning("Model prediksi belum dimuat. Silakan latih dan unggah model di tab 'Eksplorasi & Training'.")
+                st.warning("Model prediksi belum dimuat. Silakan *train* dan *upload* model di tab 'Eksplorasi & Training'.")
             else:
                 # --- UI INPUT ---
                 colA, colB = st.columns(2)
@@ -199,7 +198,6 @@ if data_source is not None:
                     exercise_mins = st.slider("Olahraga (Menit)", min_value=0, max_value=120, value=30, step=5)
                 
                 with colB:
-                    # NOTE: Options harus sama dengan kategori di data training
                     breakfast_type = st.selectbox("Jenis Sarapan", ["Heavy", "Light", "Protein-rich", "Carb-rich", "Skipped"], index=0)
                     journaling_yn = st.radio("Jurnal (Ya/Tidak)", ["Yes", "No"], index=0)
                     mood = st.selectbox("Mood Saat Bangun", ["Happy", "Neutral", "Sad"], index=0)
@@ -210,25 +208,17 @@ if data_source is not None:
                     
                     # --- PRE-PROCESSING INPUT PENGGUNA ---
                     input_data = {
-                        'Sleep Duration (hrs)': [sleep_duration],
-                        'Meditation (mins)': [meditation_mins],
-                        'Exercise (mins)': [exercise_mins],
-                        'Breakfast Type': [breakfast_type],
-                        'Journaling (Y/N)': [journaling_yn],
-                        'Mood': [mood]
+                        'Sleep Duration (hrs)': [sleep_duration], 'Meditation (mins)': [meditation_mins], 'Exercise (mins)': [exercise_mins],
+                        'Breakfast Type': [breakfast_type], 'Journaling (Y/N)': [journaling_yn], 'Mood': [mood]
                     }
-                    
-                    input_df = pd.DataFrame(input_data)
-                    
-                    # Inisialisasi DataFrame dummy dengan kolom yang diharapkan model
                     df_pred = pd.DataFrame(0, index=[0], columns=FEATURE_COLUMNS)
                     
                     # Isi nilai numerik
-                    df_pred['Sleep Duration (hrs)'] = input_df['Sleep Duration (hrs)'][0]
-                    df_pred['Meditation (mins)'] = input_df['Meditation (mins)'][0]
-                    df_pred['Exercise (mins)'] = input_df['Exercise (mins)'][0]
+                    df_pred['Sleep Duration (hrs)'] = input_data['Sleep Duration (hrs)'][0]
+                    df_pred['Meditation (mins)'] = input_data['Meditation (mins)'][0]
+                    df_pred['Exercise (mins)'] = input_data['Exercise (mins)'][0]
                     
-                    # Isi nilai kategorikal (sesuai OHE)
+                    # Isi nilai kategorikal (sesuai OHE FEATURE_COLUMNS)
                     bt_col = f'Breakfast Type_{breakfast_type}'
                     if bt_col in FEATURE_COLUMNS:
                         df_pred[bt_col] = 1
